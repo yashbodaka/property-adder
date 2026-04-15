@@ -1,0 +1,780 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Property Drafts Manager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<style>
+        body {
+            background-color: #f0fdfa; /* Pastel teal background */
+            color: #134e4a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        h2 {
+            color: #0f766e;
+            font-weight: 600;
+        }
+        .draft-card { 
+            background: #ffffff;
+            border: 1px solid #ccfbf1; 
+            border-radius: 12px; 
+            padding: 20px; 
+            margin-bottom: 25px; 
+            box-shadow: 0 4px 6px -1px rgba(20, 184, 166, 0.1), 0 2px 4px -1px rgba(20, 184, 166, 0.06);
+            transition: transform 0.2s ease;
+        }
+        .draft-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(20, 184, 166, 0.15), 0 4px 6px -2px rgba(20, 184, 166, 0.1);
+        }
+        .approved-badge { font-size: 0.85rem; padding: 5px 10px; border-radius: 20px; }
+        .bg-success { background-color: #14b8a6 !important; }
+        .bg-warning { background-color: #fde047 !important; color: #854d0e !important; }
+        .btn-primary {
+            background-color: #0d9488;
+            border-color: #0d9488;
+        }
+        .btn-primary:hover {
+            background-color: #0f766e;
+            border-color: #0f766e;
+        }
+        .form-label {
+            font-weight: 500;
+            color: #0f766e;
+        }
+        .form-control, .form-select {
+            border-color: #99f6e4;
+        }
+        .form-control:focus, .form-select:focus {
+            border-color: #14b8a6;
+            box-shadow: 0 0 0 0.25rem rgba(20, 184, 166, 0.25);
+        }
+        .filter-section {
+            background: #ffffff;
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #ccfbf1;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 4px rgba(20,184,166,0.05);
+        }
+        
+        .loc-warning {
+            border-color: #ef4444 !important;
+            box-shadow: 0 0 0 0.25rem rgba(239, 68, 68, 0.25) !important;
+            animation: blinkRed 1.5s infinite;
+        }
+
+        @keyframes blinkRed {
+            0% { box-shadow: 0 0 0 0.25rem rgba(239, 68, 68, 0.0); }
+            50% { box-shadow: 0 0 0 0.25rem rgba(239, 68, 68, 0.4); }
+            100% { box-shadow: 0 0 0 0.25rem rgba(239, 68, 68, 0.0); }
+        }
+    </style>
+</head>
+<body>
+<div class="container my-5">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Property Drafts</h2>
+        <button class="btn btn-outline-teal d-flex align-items-center fw-bold" onclick="location.reload()" style="border-color: #14b8a6; color: #0f766e;">
+            <i class="bi bi-arrow-clockwise me-2"></i>Refresh Drafts
+        </button>
+    </div>
+
+    <!-- File Upload Section -->
+    <div id="fileAccessSection" class="p-4 mb-4 rounded shadow-sm" style="background: #ffffff; border: 2px dashed #14b8a6;">
+        <h4 style="color: #0d9488;"><i class="bi bi-link me-2"></i>Link Local cardsData.js File</h4>
+        <p class="text-muted mb-3">Please select your local <code>cardsData.js</code> file to allow this dashboard to insert approved cards securely and automatically without redownloading.</p>
+        <button id="selectFileBtn" class="btn btn-primary fw-bold" onclick="selectLocalFile()">
+            <i class="bi bi-folder-check me-2"></i>Select cardsData.js File
+        </button>
+        <div id="fileStatus" class="mt-3 p-3 rounded" style="display: none; background: #f0fdfa; border: 1px solid #ccfbf1; color: #0f766e;">
+            <strong><i class="bi bi-check-circle-fill me-2 text-success"></i>File Linked Successfully</strong><br/>
+            Current file: <span id="currentFileName" class="fw-bold"></span><br/>
+            Highest ID detected: <span id="highestIdValue" class="badge bg-teal ms-1" style="background-color: #14b8a6;"></span>
+            <br/>Unique location areas found: <span id="locationsCountValue" class="badge bg-teal ms-1 cursor-pointer" style="background-color: #14b8a6; cursor: pointer;" onclick="showLocationsModal()" title="Click to view all locations"></span>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="row filter-section g-3 align-items-end" id="filtersSection" style="opacity: 0.5; pointer-events: none;">
+        <div class="col-md-4">
+            <label for="dateFilter" class="form-label">Date Added</label>
+            <select class="form-select" id="dateFilter" onchange="filterDrafts()">
+                <option value="all" selected>All Time</option>
+                <option value="3days">Last 3 Days</option>
+                <option value="7days">Last 7 Days</option>
+            </select>
+        </div>
+        <div class="col-md-4">
+            <label for="statusFilter" class="form-label">Approval Status</label>
+            <select class="form-select" id="statusFilter" onchange="filterDrafts()">
+                <option value="all">All</option>
+                <option value="approved">Approved</option>
+                <option value="pending">Pending</option>
+            </select>
+        </div>
+        <div class="col-md-4">
+            <label for="typeFilter" class="form-label">Property Type</label>
+            <select class="form-select" id="typeFilter" onchange="filterDrafts()">
+                <option value="all">All Types</option>
+                <option value="Residential">Residential</option>
+                <option value="Commercial">Commercial</option>
+                <option value="Mixed">Mixed</option>
+            </select>
+        </div>
+    </div>
+
+    <div id="draftsContainer" style="opacity: 0.5; pointer-events: none;">
+        <div class="text-center py-5">
+            <h5 class="text-secondary"><i class="bi bi-lock me-2"></i>Please link <code>cardsData.js</code> to enable viewing & editing drafts.</h5>
+        </div>
+    </div>
+</div>
+
+<!-- Success Modal -->
+<div class="modal fade" id="successModal" tabindex="-1" aria-labelledby="successModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content" style="border: 2px solid #5eead4; border-radius: 12px;">
+      <div class="modal-header" style="background-color: #f0fdfa; color: #0d9488; border-bottom: 1px solid #ccfbf1;">
+        <h5 class="modal-title" id="successModalLabel">Success!</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body text-center py-4">
+        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" fill="#14b8a6" class="bi bi-check-circle-fill mb-3" viewBox="0 0 16 16">
+          <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z"/>
+        </svg>
+                <h5 style="color: #0f766e;">Your card is added.</h5>
+                <p class="text-muted mb-0">It is automatically saved directly to your cardsData.js file.</p>
+      </div>
+      <div class="modal-footer" style="border-top: none; justify-content: center;">
+        <button type="button" class="btn btn-primary px-4" data-bs-dismiss="modal">Awesome</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Locations Modal -->
+<div class="modal fade" id="locationsModal" tabindex="-1" aria-labelledby="locationsModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content" style="border: 2px solid #5eead4; border-radius: 12px;">
+      <div class="modal-header" style="background-color: #f0fdfa; color: #0d9488; border-bottom: 1px solid #ccfbf1;">
+        <h5 class="modal-title" id="locationsModalLabel"><i class="bi bi-geo-alt-fill me-2"></i>Locations in Your File</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" style="max-height: 500px; overflow-y: auto;">
+        <div id="locationsListContainer">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let allDrafts = [];
+let successModal;
+let locationsModal;
+let existingLocationsMap = {};
+let fileHandle = null;
+let currentHighestId = 0;
+
+async function selectLocalFile() {
+    try {
+        [fileHandle] = await window.showOpenFilePicker({
+            types: [
+                {
+                    description: 'JavaScript Files',
+                    accept: {
+                        'application/javascript': ['.js'],
+                        'text/javascript': ['.js'] 
+                    }
+                }
+            ],
+            multiple: false
+        });
+
+        // Once a file is selected, verify it and read data:
+        await parseFileContent();
+
+        document.getElementById('currentFileName').innerText = fileHandle.name;
+        document.getElementById('fileStatus').style.display = 'block';
+
+        // Unlock filters and drafts
+        document.getElementById('filtersSection').style.opacity = '1';
+        document.getElementById('filtersSection').style.pointerEvents = 'auto';
+        document.getElementById('draftsContainer').style.opacity = '1';
+        document.getElementById('draftsContainer').style.pointerEvents = 'auto';
+
+        loadDrafts();
+    } catch (err) {
+        if(err.name !== "AbortError") {
+            console.error(err);
+            alert("Failed to select file. Note: This requires Chrome/Edge over HTTPS.");
+        }
+    }
+}
+
+async function parseFileContent() {
+    if(!fileHandle) return;
+    const file = await fileHandle.getFile();
+    const text = await file.text();
+    if (!text || typeof text !== 'string') {
+        currentHighestId = 0;
+        existingLocationsMap = {};
+        document.getElementById('highestIdValue').innerText = currentHighestId;
+        document.getElementById('locationsCountValue').innerText = 0;
+        return;
+    }
+    
+    // Scan text for existing locations and highest ID
+    const idRegex = /["']?id["']?\s*:\s*(\d+)/g;
+    let match;
+    currentHighestId = 0;
+    while((match = idRegex.exec(text)) !== null) {
+        const val = parseInt(match[1], 10);
+        if(val > currentHighestId) currentHighestId = val;
+    }
+    
+    // Parse existing locations properly using canonical location key
+    const locRegex = /["']?location["']?\s*:\s*["']([^"']+)["']/g;
+    existingLocationsMap = {};
+    
+    while((match = locRegex.exec(text)) !== null) {
+        const val = match[1];
+        const matchSuffix = val.match(/-(\d+)$/i);
+        if (matchSuffix) {
+            const baseTxt = val.replace(/-\d+$/i, '');
+            const key = canonicalLocationKey(baseTxt);
+            if (key) {
+                const num = parseInt(matchSuffix[1], 10);
+                existingLocationsMap[key] = Math.max(existingLocationsMap[key] || 0, num);
+            }
+        } else {
+            const key = canonicalLocationKey(val);
+            if (key) existingLocationsMap[key] = (existingLocationsMap[key] || 0) + 1;
+        }
+    }
+    
+    document.getElementById('highestIdValue').innerText = currentHighestId;
+    document.getElementById('locationsCountValue').innerText = Object.keys(existingLocationsMap).length;
+}
+
+function loadDrafts() {
+    document.getElementById("draftsContainer").innerHTML = '<div class="text-center py-5"><div class="spinner-border text-teal" style="color: #14b8a6;" role="status"><span class="visually-hidden">Loading drafts...</span></div></div>';
+
+    fetch("/api/drafts")
+        .then(res => res.json())
+        .then(res => {
+            if(res.data) {
+                allDrafts = res.data;
+                // Backend still returns some existingLocationsMap if its server local file exists, but we trust the selected client file:
+                // Do not override user's existingLocationsMap locally.
+                filterDrafts();
+                if (res.status !== "live") {
+                    const detailText = Array.isArray(res.details) && res.details.length ? `\n${res.details.join("\n")}` : "";
+                    alert(`Unable to load live drafts from upstream API.${detailText}`);
+                }
+            } else {
+                document.getElementById("draftsContainer").innerHTML = "<p class=\"text-danger\">Failed to load drafts.</p>";
+            }
+        }).catch(() => {
+            document.getElementById("draftsContainer").innerHTML = "<p class=\"text-danger\">Failed to fetch data.</p>";
+        });
+}
+
+function showLocationsModal() {
+    const container = document.getElementById('locationsListContainer');
+    container.innerHTML = '';
+    
+    const locations = Object.keys(existingLocationsMap).sort();
+    
+    if(locations.length === 0) {
+        container.innerHTML = '<p class="text-muted text-center">No locations found.</p>';
+        locationsModal.show();
+        return;
+    }
+    
+    let html = '<div class="list-group">';
+    locations.forEach((locKey, idx) => {
+        const count = existingLocationsMap[locKey];
+        // Reconstruct display name from canonical key
+        const displayName = locKey
+            .split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+        
+        html += `
+            <div class="list-group-item" style="border-color: #e2e8f0; background-color: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="mb-1 fw-bold" style="color: #0d9488;">${displayName}</h6>
+                        <small class="text-muted">Canonical: <code>${locKey}</code></small>
+                    </div>
+                    <div class="text-end">
+                        <span class="badge bg-teal" style="background-color: #14b8a6; font-size: 1rem; padding: 0.5rem 0.75rem;">
+                            ${count} property/ies
+                        </span>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    html += '</div>';
+    
+    container.innerHTML = html;
+    locationsModal.show();
+}
+
+function canonicalLocationKey(value) {
+    return String(value || "")
+        .toLowerCase()
+        .replace(/[-_/]+/g, " ")
+        .replace(/\b(road|rd)\b/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function locationDisplayBase(value) {
+    const raw = String(value || "").trim();
+    const withoutRoad = raw.replace(/(?:[-_\s]+)?(road|rd)\s*$/i, "").trim();
+    return withoutRoad || raw;
+}
+
+function escapeHtml(text) {
+    return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    successModal = new bootstrap.Modal(document.getElementById('successModal'));
+    locationsModal = new bootstrap.Modal(document.getElementById('locationsModal'));
+});
+
+function updateLocationID(draftId) {
+    const inputLoc = document.getElementById("propLoc-" + draftId).value.trim();
+    const locGenField = document.getElementById("loc-" + draftId);
+    const key = canonicalLocationKey(inputLoc);
+    const baseForId = locationDisplayBase(inputLoc);
+    
+    if(!inputLoc) {
+        locGenField.value = "";
+        locGenField.classList.remove("loc-warning");
+        return;
+    }
+
+    if(existingLocationsMap[key]) {
+        const nextNum = existingLocationsMap[key] + 1;
+        locGenField.value = `${baseForId}-${nextNum.toString().padStart(2, '0')}`;
+        locGenField.classList.remove("loc-warning");
+    } else {
+        locGenField.value = `${baseForId}-01`;
+        locGenField.classList.add("loc-warning");
+    }
+}
+
+function filterDrafts() {
+    const dateFilter = document.getElementById("dateFilter").value;
+    const statusFilter = document.getElementById("statusFilter").value;
+    const typeFilter = document.getElementById("typeFilter").value;
+    
+    let filtered = allDrafts;
+
+    // Filter Date
+    if (dateFilter !== "all") {
+        const pastDate = new Date();
+        const days = dateFilter === "3days" ? 3 : 7;
+        pastDate.setDate(pastDate.getDate() - days);
+        filtered = filtered.filter(d => d.date && new Date(d.date) >= pastDate);
+    }
+    
+    // Filter Status
+    if (statusFilter !== "all") {
+        const isAppr = statusFilter === "approved";
+        filtered = filtered.filter(d => d.isApproved === isAppr);
+    }
+
+    // Filter Type
+    if (typeFilter !== "all") {
+        filtered = filtered.filter(d => d.type === typeFilter);
+    }
+
+    renderDrafts(filtered);
+}
+
+function renderDrafts(drafts) {
+    const container = document.getElementById("draftsContainer");
+    container.innerHTML = "";
+    
+    if (drafts.length === 0) {
+        container.innerHTML = "<div class=\"text-center py-5 text-muted\"><h5>No drafts match your selected filters.</h5></div>";
+        return;
+    }
+
+    drafts.forEach(draft => {
+        const isApprovedTxt = draft.isApproved 
+            ? "<span class=\"badge bg-success approved-badge align-middle ms-2\">Approved</span>" 
+            : "<span class=\"badge bg-warning approved-badge align-middle ms-2\">Pending</span>";
+            
+        const safeName = (draft.projectName || "property").toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+        const autoImages = `images/${safeName}-01.jpg, images/${safeName}-02.jpg, images/${safeName}-03.jpg`;
+
+        const normalizedFeatures = (draft.features || [])
+            .flatMap(item => String(item).replace(/\\n/g, "\n").split("\n"))
+            .map(item => item.trim())
+            .filter(item => item.length > 0);
+
+        const featureChecksHtml = normalizedFeatures.length
+            ? normalizedFeatures.map((item, idx) => {
+                const safeVal = escapeHtml(item);
+                return `<div class="col-12 mb-2">
+                    <div class="d-flex align-items-center">
+                        <div class="form-check flex-grow-1">
+                            <input class="form-check-input feature-checkbox" type="checkbox" checked id="feature-${draft.id}-${idx}" value="${safeVal}">
+                            <input type="text" class="form-control form-control-sm border-0 bg-transparent py-0 feature-editor" 
+                                   value="${safeVal}" 
+                                   style="box-shadow: none; height: 1.5rem; color: #4b5563; font-weight: 500;"
+                                   oninput="syncFeatureValue(this, 'feature-${draft.id}-${idx}')">
+                        </div>
+                    </div>
+                </div>`;
+            }).join("")
+            : `<div class="col-12"><small class="text-muted">No features detected from API.</small></div>`;
+
+        let categoriesHtml = "";
+        if(draft.nestedCategories && Object.keys(draft.nestedCategories).length > 0) {
+            for(const [catName, catItems] of Object.entries(draft.nestedCategories)) {
+                categoriesHtml += `<div class="mb-3 border rounded p-3 bg-white shadow-sm" style="border-color: #e2e8f0 !important;">
+                    <div class="d-flex align-items-center border-bottom pb-2 mb-3">
+                        <i class="bi bi-building-add me-2 text-muted"></i>
+                        <h6 class="mb-0 fw-bold" style="color: #0f766e;">${catName}</h6>
+                    </div>
+                    <div class="row fw-bold text-muted small mb-2 d-none d-md-flex px-1">
+                        <div class="col-3">Type/BHK</div>
+                        <div class="col-3">Sq.Ft</div>
+                        <div class="col-3">Sq.Ft Type</div>
+                        <div class="col-3">Price</div>
+                    </div>`;
+                    
+                catItems.forEach((item, idx) => {
+                    categoriesHtml += `<div class="row g-2 mb-2 align-items-center category-row px-1" data-cat="${catName.replace(/[^a-z0-9]/gi, '')}">
+                        <div class="col-6 col-md-3">
+                            <input type="text" class="form-control form-control-sm item-bhk font-monospace" value="${item.bhk || ''}" placeholder="BHK/Office">
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <input type="text" class="form-control form-control-sm item-sqft font-monospace" value="${item.sqft || ''}" placeholder="Sqft">
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <input type="text" class="form-control form-control-sm item-sqfttype" value="${item.sqftType || 'SuperBuilt-up'}" placeholder="Type">
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <input type="text" class="form-control form-control-sm item-price fw-bold text-success" value="${item.price || ''}" placeholder="Price">
+                        </div>
+                    </div>`;
+                });
+                categoriesHtml += `</div>`;
+            }
+        } else {
+            categoriesHtml = `<p class="text-muted small">No property sizes available.</p>`;
+        }
+
+        const cardHTML = `
+            <div class="draft-card p-4" id="card-${draft.id}">
+                <div class="d-flex justify-content-between align-items-center mb-4 border-bottom pb-3">
+                    <div class="d-flex align-items-center">
+                        <div class="bg-teal text-white rounded-circle d-flex align-items-center justify-content-center me-3" style="width: 48px; height: 48px; background-color: #0d9488; font-size: 1.2rem;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" class="bi bi-building" viewBox="0 0 16 16">
+                                <path d="M4 2.5a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1Zm3 0a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1Zm3.5-.5a.5.5 0 0 0-.5.5v1a.5.5 0 0 0 .5.5h1a.5.5 0 0 0 .5-.5v-1a.5.5 0 0 0-.5-.5h-1ZM4 5.5a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1ZM7.5 5a.5.5 0 0 0-.5.5v1a.5.5 0 0 0 .5.5h1a.5.5 0 0 0 .5-.5v-1a.5.5 0 0 0-.5-.5h-1Zm2.5.5a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1ZM4.5 8a.5.5 0 0 0-.5.5v1a.5.5 0 0 0 .5.5h1a.5.5 0 0 0 .5-.5v-1a.5.5 0 0 0-.5-.5h-1Zm2.5.5a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1a.5.5 0 0 1-.5-.5v-1Zm3.5-.5a.5.5 0 0 0-.5.5v1a.5.5 0 0 0 .5.5h1a.5.5 0 0 0 .5-.5v-1a.5.5 0 0 0-.5-.5h-1Z"/>
+                                <path d="M2 1a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V1Zm11 0H3v14h3v-2.5a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 .5.5V15h3V1Z"/>
+                            </svg>
+                        </div>
+                        <div>
+                            <h4 class="mb-1" style="color: #115e59; font-weight: 700;">${draft.projectName}</h4>
+                            ${isApprovedTxt}
+                        </div>
+                    </div>
+                    <div class="text-end">
+                        <small class="text-muted d-block fw-bold mb-1">${new Date(draft.date).toLocaleDateString(undefined, {year: 'numeric', month: 'short', day: 'numeric'})}</small>
+                        <span class="badge" style="background-color: #ccfbf1; color: #0d9488; font-weight: 600; letter-spacing: 0.5px;">${draft.type.toUpperCase()}</span>
+                    </div>
+                </div>
+
+                <div class="row g-4">
+                    <!-- General Details Section -->
+                    <div class="col-lg-6">
+                        <h6 class="fw-bold mb-3" style="color: #0f766e;"><i class="bi bi-info-circle me-2"></i>General Details</h6>
+                        <div class="p-3 rounded" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
+                            <div class="row g-3">
+                                <div class="col-sm-6">
+                                    <label class="form-label small mb-1 text-muted fw-semibold">Development Type</label>
+                                    <input type="text" class="form-control form-control-sm" id="type-${draft.id}" value="${draft.type}">
+                                </div>
+                                <div class="col-sm-6">
+                                    <label class="form-label small mb-1 text-muted fw-semibold">Scheme Name</label>
+                                    <input type="text" class="form-control form-control-sm" id="schemeName-${draft.id}" value="${draft.projectName}">
+                                </div>
+                                <div class="col-sm-6">
+                                    <label class="form-label small mb-1 text-muted fw-semibold">Property Area (Input)</label>
+                                    <input type="text" class="form-control form-control-sm" id="propLoc-${draft.id}" value="${draft.propertyLocation || 'Unknown'}" oninput="updateLocationID('${draft.id}')">
+                                </div>
+                                <div class="col-sm-6">
+                                    <label class="form-label small mb-1 text-muted fw-semibold">Generated Location ID</label>
+                                    <input type="text" class="form-control form-control-sm loc-gen fw-bold" id="loc-${draft.id}" value="" readonly style="background-color: #fff;">
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label small mb-1 text-muted fw-semibold">Visitor Remarks (Reference Only)</label>
+                                    <div class="p-2 rounded bg-white text-muted small" style="border: 1px solid #e2e8f0; min-height: 40px; border-left: 4px solid #14b8a6;">
+                                        ${draft.remarks ? draft.remarks : '<span class="fst-italic">No remarks provided.</span>'}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Pricing & Media Section -->
+                    <div class="col-lg-6">
+                        <h6 class="fw-bold mb-3" style="color: #0f766e;"><i class="bi bi-tag me-2"></i>Pricing & Media</h6>
+                        <div class="p-3 rounded h-100" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
+                            <div class="row g-3">
+                                <div class="col-12">
+                                    <label class="form-label small mb-1 text-muted fw-semibold">Raw Price Multiplier</label>
+                                    <div class="input-group input-group-sm">
+                                        <span class="input-group-text bg-white border-end-0 text-muted">₹</span>
+                                        <input type="number" class="form-control border-start-0 ps-0" id="priceNum-${draft.id}" value="${draft.priceNum || 0}">
+                                    </div>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label small mb-1 text-muted fw-semibold">Image Paths</label>
+                                    <textarea class="form-control form-control-sm" id="img-${draft.id}" rows="2" style="resize: none;">${autoImages}</textarea>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Detailed Units Section -->
+                    <div class="col-12 mt-4">
+                        <div class="d-flex align-items-center mb-3">
+                            <h6 class="fw-bold mb-0 me-2" style="color: #0f766e;"><i class="bi bi-grid-1x2 me-2"></i>Unit Configurations & Pricing</h6>
+                            <div class="flex-grow-1" style="height: 1px; background-color: #e2e8f0;"></div>
+                        </div>
+                        <div id="nested-cards-container-${draft.id}" class="p-3 rounded" style="background-color: #f1f5f9; border: 1px dashed #cbd5e1;">
+                            ${categoriesHtml}
+                        </div>
+                    </div>
+
+                    <!-- Features Section -->
+                    <div class="col-12 mt-3">
+                        <div class="d-flex align-items-center mb-3">
+                            <h6 class="fw-bold mb-0 me-2" style="color: #0f766e;"><i class="bi bi-stars me-2"></i>Features & Highlights</h6>
+                            <div class="flex-grow-1" style="height: 1px; background-color: #e2e8f0;"></div>
+                        </div>
+                        <div class="p-3 rounded shadow-sm" style="background-color: #ffffff; border: 1px solid #ccfbf1;">
+                            <div id="features-${draft.id}" class="row px-2">
+                                ${featureChecksHtml}
+                            </div>
+                            <!-- Add Feature Input -->
+                            <div class="row px-2 mt-2 pt-2 border-top">
+                                <div class="col-12">
+                                    <div class="input-group input-group-sm">
+                                        <input type="text" class="form-control" id="new-feature-input-${draft.id}" placeholder="Type new feature...">
+                                        <button class="btn btn-primary" type="button" onclick="addCustomFeature('${draft.id}')">
+                                            <i class="bi bi-plus-circle me-1"></i>Add
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mt-3 pt-2 border-top">
+                                <small class="text-muted"><i class="bi bi-info-circle me-1"></i>All features are selected by default. Uncheck to exclude.</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-5 pt-3 text-end" style="border-top: 2px dashed #e2e8f0;">
+                    <button class="btn btn-primary px-5 py-2 fw-bold shadow-sm" onclick="approveDraft('${draft.id}')" style="border-radius: 8px;">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-check2-circle me-2" viewBox="0 0 16 16">
+                            <path d="M2.5 8a5.5 5.5 0 0 1 8.25-4.764.5.5 0 0 0 .5-.866A6.5 6.5 0 1 0 14.5 8a.5.5 0 0 0-1 0 5.5 5.5 0 1 1-11 0z"/>
+                            <path d="M15.354 3.354a.5.5 0 0 0-.708-.708L8 9.293 5.354 6.646a.5.5 0 1 0-.708.708l3 3a.5.5 0 0 0 .708 0l7-7z"/>
+                        </svg>
+                        Approve & Update File
+                    </button>
+                </div>
+            </div>
+        `;
+        container.innerHTML += cardHTML;
+        
+        // initialize the generated ID logic for each card!
+        setTimeout(() => updateLocationID(draft.id), 0);
+    });
+}
+
+function syncFeatureValue(inputEl, checkboxId) {
+    const checkbox = document.getElementById(checkboxId);
+    if (checkbox) {
+        checkbox.value = inputEl.value;
+    }
+}
+
+function addCustomFeature(draftId) {
+    const input = document.getElementById(`new-feature-input-${draftId}`);
+    const featureText = input.value.trim();
+    if (!featureText) return;
+
+    const container = document.getElementById(`features-${draftId}`);
+    const idx = container.querySelectorAll('.form-check').length;
+    const safeVal = escapeHtml(featureText);
+    
+    const newFeatureHtml = `
+        <div class="col-12 mb-2">
+            <div class="d-flex align-items-center">
+                <div class="form-check flex-grow-1">
+                    <input class="form-check-input feature-checkbox" type="checkbox" checked id="feature-${draftId}-${idx}" value="${safeVal}">
+                    <input type="text" class="form-control form-control-sm border-0 bg-transparent py-0 feature-editor" 
+                           value="${safeVal}" 
+                           style="box-shadow: none; height: 1.5rem; color: #4b5563; font-weight: 500;"
+                           oninput="syncFeatureValue(this, 'feature-${draftId}-${idx}')">
+                </div>
+            </div>
+        </div>
+    `;
+    container.insertAdjacentHTML('beforeend', newFeatureHtml);
+    input.value = "";
+    input.focus();
+}
+
+function approveDraft(draftId) {
+    const rawDraft = allDrafts.find(d => d.id === draftId);
+    
+    // Parse nested categories visually instead of JSON textarea
+    let parsedNested = {};
+    const container = document.getElementById("nested-cards-container-" + draftId);
+    
+    // Loop over each category block
+    const blocks = container.querySelectorAll(".mb-3.border.rounded");
+    blocks.forEach(block => {
+        const catName = block.querySelector("h6").innerText.trim();
+        parsedNested[catName] = [];
+        
+        const rows = block.querySelectorAll(".category-row");
+        rows.forEach(row => {
+            const bhk = row.querySelector(".item-bhk").value.trim();
+            const sqft = row.querySelector(".item-sqft").value.trim();
+            const sqftType = row.querySelector(".item-sqfttype").value.trim();
+            const price = row.querySelector(".item-price").value.trim();
+            
+            if(bhk || sqft || price) {
+                parsedNested[catName].push({
+                    bhk: bhk,
+                    sqft: sqft,
+                    sqftType: sqftType,
+                    price: price
+                });
+            }
+        });
+    });
+
+    const payload = {
+        
+        schemeName: document.getElementById("schemeName-" + draftId).value,
+        type: document.getElementById("type-" + draftId).value,
+        latest: document.getElementById("propLoc-" + draftId).value,
+        propertyLocation: document.getElementById("propLoc-" + draftId).value,
+        location: document.getElementById("loc-" + draftId).value,
+        price: document.getElementById("priceNum-" + draftId).value,
+        images: document.getElementById("img-" + draftId).value,
+        features: Array.from(document.querySelectorAll(`#card-${draftId} .feature-checkbox:checked`)).map(el => el.value),
+        nestedCategories: parsedNested
+    };
+
+    if(!fileHandle) {
+        alert("Please load cardsData.js first.");
+        return;
+    }
+
+    payload.currentHighestId = currentHighestId;
+
+    fetch("/api/generate-card", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    })
+    .then(res => res.json())
+    .then(async data => {
+        if(data.success) {
+            try {
+                // Ensure we have permission
+                const options = { mode: 'readwrite' };
+                if ((await fileHandle.queryPermission(options)) !== 'granted') {
+                    if ((await fileHandle.requestPermission(options)) !== 'granted') {
+                        throw new Error('Permission denied to write to file.');
+                    }
+                }
+
+                // Read current file directly
+                const fileObj = await fileHandle.getFile();
+                let currentText = await fileObj.text();
+                
+                // Find closing ]; and insert the new js_snippet
+                const lastBracketIdx = currentText.lastIndexOf("];");
+                if (lastBracketIdx === -1) {
+                    throw new Error("Could not find closing ]; in the selected JS file. Invalid format.");
+                }
+
+                const beforeClosing = currentText.substring(0, lastBracketIdx).replace(/\s+$/, '');
+                // Check if array already has items (will end with }), and add comma accordingly
+                const hasItems = beforeClosing.trimEnd().endsWith('}');
+                const prefix = hasItems ? ',\n  ' : '';
+                const newText = beforeClosing + prefix + data.js_snippet + "\n];\n";
+
+                // Save back automatically
+                const writable = await fileHandle.createWritable();
+                await writable.write(newText);
+                await writable.close();
+
+                // Update our local highest ID context since we appended a new card
+                currentHighestId = data.id;
+                document.getElementById('highestIdValue').innerText = currentHighestId;
+
+                successModal.show();
+                // Also append the new location to existingLocationsMap locally so it updates immediately
+                const key = canonicalLocationKey(payload.propertyLocation);
+                if (key) {
+                    const generatedLocation = String(payload.location || "");
+                    const match = generatedLocation.match(/-(\d+)$/);
+                    if (match) {
+                        const suffixNum = parseInt(match[1], 10);
+                        existingLocationsMap[key] = Math.max(existingLocationsMap[key] || 0, suffixNum);
+                    } else {
+                        existingLocationsMap[key] = (existingLocationsMap[key] || 0) + 1;
+                    }
+                }
+
+                document.getElementById('locationsCountValue').innerText = Object.keys(existingLocationsMap).length;
+
+                const cardEl = document.getElementById("card-" + draftId);
+                if (cardEl) {
+                    cardEl.style.transition = "opacity 0.4s";
+                    cardEl.style.opacity = "0";
+                    setTimeout(() => cardEl.remove(), 400);
+                }
+            } catch(e) {
+                console.error(e);
+                alert("Failed to write to file: " + e.message);
+            }
+        } else {
+            alert("Error: " + data.error);
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert("Failed to save draft details via server.");
+    });
+}
+</script>
+</body>
+</html>
