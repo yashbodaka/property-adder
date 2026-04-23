@@ -8,8 +8,7 @@ from datetime import datetime, date
 app = Flask(__name__)
 
 # Config
-EXPRESS_API_APPROVED = "https://render-backend-5sur.onrender.com/api/builder-visits/approved"
-EXPRESS_API_PENDING = "https://render-backend-5sur.onrender.com/api/builder-visits"
+EXPRESS_API_ALL_BUILDER_VISITS = "https://render-backend-5sur.onrender.com/api/builder-visits?view=all"
 JS_FILE_PATH = "cardsData.js"
 
 def fetch_json_with_retry(url, timeout=20, retries=1):
@@ -212,21 +211,13 @@ def get_drafts():
     fetch_success = False
     fetch_details = []
 
-    # Primary source: builder visits list endpoint.
-    pending_data, pending_error = fetch_json_with_retry(EXPRESS_API_PENDING, timeout=20, retries=1)
-    if pending_data:
-        all_data.extend(pending_data)
+    # Primary source: all builder visits, including Level 2 approved records.
+    builder_visits, builder_visits_error = fetch_json_with_retry(EXPRESS_API_ALL_BUILDER_VISITS, timeout=20, retries=1)
+    if builder_visits:
+        all_data.extend(builder_visits)
         fetch_success = True
-    if pending_error:
-        fetch_details.append(pending_error)
-
-    # Optional source: approved endpoint (currently may return 404).
-    approved_data, approved_error = fetch_json_with_retry(EXPRESS_API_APPROVED, timeout=20, retries=0)
-    if approved_data:
-        all_data.extend(approved_data)
-        fetch_success = True
-    if approved_error:
-        fetch_details.append(approved_error)
+    if builder_visits_error:
+        fetch_details.append(builder_visits_error)
 
     unique_visits = {v['_id']: v for v in all_data}.values()
 
