@@ -99,6 +99,22 @@
 
     <!-- Filters -->
     <div class="row filter-section g-3 align-items-end" id="filtersSection" style="opacity: 0.5; pointer-events: none;">
+        <div class="col-md-12">
+            <label for="nameSearch" class="form-label">Search Project Name</label>
+            <div class="input-group">
+                <span class="input-group-text" style="background-color: #f0fdfa; border-color: #99f6e4; color: #0f766e;">
+                    <i class="bi bi-search"></i>
+                </span>
+                <input
+                    type="search"
+                    class="form-control"
+                    id="nameSearch"
+                    placeholder="Type a project or builder name..."
+                    oninput="filterDrafts()"
+                    autocomplete="off"
+                >
+            </div>
+        </div>
         <div class="col-md-4">
             <label for="dateFilter" class="form-label">Date Added</label>
             <select class="form-select" id="dateFilter" onchange="filterDrafts()">
@@ -379,11 +395,25 @@ function updateLocationID(draftId) {
 }
 
 function filterDrafts() {
+    const searchTerm = document.getElementById("nameSearch").value.trim().toLowerCase();
     const dateFilter = document.getElementById("dateFilter").value;
     const statusFilter = document.getElementById("statusFilter").value;
     const typeFilter = document.getElementById("typeFilter").value;
     
     let filtered = allDrafts;
+
+    // Search by the visible card name first, with location/type as helpful fallbacks.
+    if (searchTerm) {
+        filtered = filtered.filter(d => {
+            const searchableText = [
+                d.projectName,
+                d.propertyLocation,
+                d.type
+            ].map(value => String(value || "").toLowerCase()).join(" ");
+
+            return searchableText.includes(searchTerm);
+        });
+    }
 
     // Filter Date
     if (dateFilter !== "all") {
