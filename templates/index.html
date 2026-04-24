@@ -197,7 +197,76 @@ let fileHandle = null;
 let currentHighestId = 0;
 let prefetchWarningMessage = "";
 let currentLoadToken = 0;
-const stagedBatchSizes = [20, 20, 50, 100];
+let filterDebounceTimer = null;
+const FILTER_DEBOUNCE_MS = 180;
+const DRAFTS_CACHE_STORAGE_KEY = "propertyDraftsCacheV1";
+const renderedDraftSignatures = new Map();
+
+function readDraftsFromCache() {
+    try {
+        const raw = localStorage.getItem(DRAFTS_CACHE_STORAGE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || !Array.isArray(parsed.data)) return null;
+        return parsed;
+    } catch (err) {
+        console.warn("Unable to read drafts cache:", err);
+        return null;
+    }
+}
+
+function writeDraftsToCache(drafts) {
+    try {
+        localStorage.setItem(
+            DRAFTS_CACHE_STORAGE_KEY,
+            JSON.stringify({
+                data: drafts,
+                cachedAt: new Date().toISOString()
+            })
+        );
+    } catch (err) {
+        console.warn("Unable to write drafts cache:", err);
+    }
+}
+
+function buildDraftSignatureMap(drafts) {
+    const map = new Map();
+    (drafts || []).forEach(draft => {
+        const id = String(draft?.id ?? "");
+        if (!id) return;
+        map.set(id, JSON.stringify(draft));
+    });
+    return map;
+}
+
+function getDraftDeltaSummary(previousDrafts, nextDrafts) {
+    const prevMap = buildDraftSignatureMap(previousDrafts);
+    const nextMap = buildDraftSignatureMap(nextDrafts);
+    let newCount = 0;
+    let updatedCount = 0;
+    let deletedCount = 0;
+
+    for (const [id, sig] of nextMap.entries()) {
+        if (!prevMap.has(id)) {
+            newCount += 1;
+        } else if (prevMap.get(id) !== sig) {
+            updatedCount += 1;
+        }
+    }
+
+    for (const id of prevMap.keys()) {
+        if (!nextMap.has(id)) {
+            deletedCount += 1;
+        }
+    }
+
+    return {
+        newCount,
+        updatedCount,
+        deletedCount,
+        hasChanges: newCount > 0 || updatedCount > 0 || deletedCount > 0
+    };
+}
 
 async function selectLocalFile() {
     try {
@@ -286,68 +355,62 @@ async function parseFileContent() {
     document.getElementById('locationsCountValue').innerText = Object.keys(existingLocationsMap).length;
 }
 
-function nextBatchSize(stepIndex) {
-    if (stepIndex < stagedBatchSizes.length) {
-        return stagedBatchSizes[stepIndex];
-    }
-    return stagedBatchSizes[stagedBatchSizes.length - 1];
-}
-
-function fetchDraftBatch(offset, limit) {
-    const params = new URLSearchParams({
-        offset: String(offset),
-        limit: String(limit)
-    });
-    return fetch(`/api/drafts?${params.toString()}`).then(res => res.json());
-}
-
 async function loadDrafts() {
     const loadToken = ++currentLoadToken;
-    allDrafts = [];
     prefetchWarningMessage = "";
+    const cachePayload = readDraftsFromCache();
+    const cachedDrafts = cachePayload && Array.isArray(cachePayload.data) ? cachePayload.data : [];
+    const hasCachedDrafts = cachedDrafts.length > 0;
 
-    document.getElementById("draftsContainer").innerHTML = '<div class="text-center py-5"><div class="spinner-border text-teal" style="color: #14b8a6;" role="status"><span class="visually-hidden">Loading drafts...</span></div></div>';
+    if (hasCachedDrafts) {
+        allDrafts = cachedDrafts;
+        filterDrafts(true);
+    } else {
+        allDrafts = [];
+        document.getElementById("draftsContainer").innerHTML = '<div class="text-center py-5"><div class="spinner-border text-teal" style="color: #14b8a6;" role="status"><span class="visually-hidden">Loading drafts...</span></div></div>';
+    }
 
-    let offset = 0;
-    let stepIndex = 0;
-    let hasMore = true;
+    try {
+        const res = await fetch("/api/drafts").then(response => response.json());
 
-    while (hasMore) {
-        const batchLimit = nextBatchSize(stepIndex);
-        stepIndex += 1;
-
-        try {
-            const res = await fetchDraftBatch(offset, batchLimit);
-
-            if (loadToken !== currentLoadToken) {
-                return;
-            }
-
-            if (res.status !== "live") {
-                const detailText = Array.isArray(res.details) && res.details.length ? `\n${res.details.join("\n")}` : "";
-                prefetchWarningMessage = `Unable to load live drafts from upstream API.${detailText}`;
-            }
-
-            if (!res || !Array.isArray(res.data)) {
-                document.getElementById("draftsContainer").innerHTML = "<p class=\"text-danger\">Failed to load drafts.</p>";
-                return;
-            }
-
-            allDrafts = allDrafts.concat(res.data);
-            filterDrafts();
-
-            offset += res.data.length;
-            hasMore = Boolean(res.hasMore) && res.data.length > 0;
-
-            // Yield back to the browser between batches to keep interactions responsive.
-            await new Promise(resolve => setTimeout(resolve, 0));
-        } catch {
-            if (loadToken !== currentLoadToken) {
-                return;
-            }
-            document.getElementById("draftsContainer").innerHTML = "<p class=\"text-danger\">Failed to fetch data.</p>";
+        if (loadToken !== currentLoadToken) {
             return;
         }
+
+        if (res.status !== "live") {
+            const detailText = Array.isArray(res.details) && res.details.length ? `\n${res.details.join("\n")}` : "";
+            prefetchWarningMessage = `Unable to load live drafts from upstream API.${detailText}`;
+        }
+
+        if (!res || !Array.isArray(res.data)) {
+            if (!hasCachedDrafts) {
+                document.getElementById("draftsContainer").innerHTML = "<p class=\"text-danger\">Failed to load drafts.</p>";
+            }
+            return;
+        }
+
+        const freshDrafts = res.data;
+        const delta = getDraftDeltaSummary(allDrafts, freshDrafts);
+        allDrafts = freshDrafts;
+        writeDraftsToCache(freshDrafts);
+
+        if (!hasCachedDrafts || delta.hasChanges) {
+            filterDrafts(true);
+        }
+
+        if (hasCachedDrafts && delta.hasChanges) {
+            console.info(
+                `Draft sync applied: +${delta.newCount} new, ${delta.updatedCount} updated, ${delta.deletedCount} removed.`
+            );
+        }
+    } catch {
+        if (loadToken !== currentLoadToken) {
+            return;
+        }
+        if (!hasCachedDrafts) {
+            document.getElementById("draftsContainer").innerHTML = "<p class=\"text-danger\">Failed to fetch data.</p>";
+        }
+        return;
     }
 
     if (!allDrafts.length) {
@@ -449,7 +512,17 @@ function updateLocationID(draftId) {
     }
 }
 
-function filterDrafts() {
+function filterDrafts(immediate = false) {
+    if (immediate) {
+        applyDraftFilters();
+        return;
+    }
+
+    clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = setTimeout(applyDraftFilters, FILTER_DEBOUNCE_MS);
+}
+
+function applyDraftFilters() {
     const searchTerm = document.getElementById("nameSearch").value.trim().toLowerCase();
     const dateFilter = document.getElementById("dateFilter").value;
     const statusFilter = document.getElementById("statusFilter").value;
@@ -492,49 +565,50 @@ function filterDrafts() {
     renderDrafts(filtered);
 }
 
-function renderDrafts(drafts) {
-    const container = document.getElementById("draftsContainer");
-    container.innerHTML = "";
-    
-    if (drafts.length === 0) {
-        container.innerHTML = "<div class=\"text-center py-5 text-muted\"><h5>No drafts match your selected filters.</h5></div>";
-        return;
-    }
+function createCardElementFromHtml(cardHtml) {
+    const template = document.createElement("template");
+    template.innerHTML = cardHtml.trim();
+    return template.content.firstElementChild;
+}
 
-    drafts.forEach(draft => {
-        const isApprovedTxt = draft.isApproved 
-            ? "<span class=\"badge bg-success approved-badge align-middle ms-2\">Approved</span>" 
-            : "<span class=\"badge bg-warning approved-badge align-middle ms-2\">Pending</span>";
-            
-        const safeName = (draft.projectName || "property").toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-        const autoImages = `images/${safeName}-01.jpg, images/${safeName}-02.jpg, images/${safeName}-03.jpg`;
+function getDraftRenderSignature(draft) {
+    return JSON.stringify(draft);
+}
 
-        const normalizedFeatures = (draft.features || [])
-            .flatMap(item => String(item).replace(/\\n/g, "\n").split("\n"))
-            .map(item => item.trim())
-            .filter(item => item.length > 0);
+function buildDraftCardHtml(draft) {
+    const isApprovedTxt = draft.isApproved
+        ? "<span class=\"badge bg-success approved-badge align-middle ms-2\">Approved</span>"
+        : "<span class=\"badge bg-warning approved-badge align-middle ms-2\">Pending</span>";
 
-        const featureChecksHtml = normalizedFeatures.length
-            ? normalizedFeatures.map((item, idx) => {
-                const safeVal = escapeHtml(item);
-                return `<div class="col-12 mb-2">
+    const safeName = (draft.projectName || "property").toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    const autoImages = `images/${safeName}-01.jpg, images/${safeName}-02.jpg, images/${safeName}-03.jpg`;
+
+    const normalizedFeatures = (draft.features || [])
+        .flatMap(item => String(item).replace(/\\n/g, "\n").split("\n"))
+        .map(item => item.trim())
+        .filter(item => item.length > 0);
+
+    const featureChecksHtml = normalizedFeatures.length
+        ? normalizedFeatures.map((item, idx) => {
+            const safeVal = escapeHtml(item);
+            return `<div class="col-12 mb-2">
                     <div class="d-flex align-items-center">
                         <div class="form-check flex-grow-1">
                             <input class="form-check-input feature-checkbox" type="checkbox" checked id="feature-${draft.id}-${idx}" value="${safeVal}">
-                            <input type="text" class="form-control form-control-sm border-0 bg-transparent py-0 feature-editor" 
-                                   value="${safeVal}" 
+                            <input type="text" class="form-control form-control-sm border-0 bg-transparent py-0 feature-editor"
+                                   value="${safeVal}"
                                    style="box-shadow: none; height: 1.5rem; color: #4b5563; font-weight: 500;"
                                    oninput="syncFeatureValue(this, 'feature-${draft.id}-${idx}')">
                         </div>
                     </div>
                 </div>`;
-            }).join("")
-            : `<div class="col-12"><small class="text-muted">No features detected from API.</small></div>`;
+        }).join("")
+        : `<div class="col-12"><small class="text-muted">No features detected from API.</small></div>`;
 
-        let categoriesHtml = "";
-        if(draft.nestedCategories && Object.keys(draft.nestedCategories).length > 0) {
-            for(const [catName, catItems] of Object.entries(draft.nestedCategories)) {
-                categoriesHtml += `<div class="mb-3 border rounded p-3 bg-white shadow-sm" data-category-block="true" style="border-color: #e2e8f0 !important;">
+    let categoriesHtml = "";
+    if (draft.nestedCategories && Object.keys(draft.nestedCategories).length > 0) {
+        for (const [catName, catItems] of Object.entries(draft.nestedCategories)) {
+            categoriesHtml += `<div class="mb-3 border rounded p-3 bg-white shadow-sm" data-category-block="true" style="border-color: #e2e8f0 !important;">
                     <div class="d-flex align-items-center justify-content-between border-bottom pb-2 mb-3">
                         <div class="d-flex align-items-center">
                             <i class="bi bi-building-add me-2 text-muted"></i>
@@ -550,9 +624,9 @@ function renderDrafts(drafts) {
                         <div class="col-3">Sq.Ft Type</div>
                         <div class="col-3">Price</div>
                     </div>`;
-                    
-                catItems.forEach((item, idx) => {
-                    categoriesHtml += `<div class="row g-2 mb-2 align-items-center category-row px-1" data-cat="${catName.replace(/[^a-z0-9]/gi, '')}">
+
+            catItems.forEach(item => {
+                categoriesHtml += `<div class="row g-2 mb-2 align-items-center category-row px-1" data-cat="${catName.replace(/[^a-z0-9]/gi, '')}">
                         <div class="col-6 col-md-3">
                             <input type="text" class="form-control form-control-sm item-bhk font-monospace" value="${item.bhk || ''}" placeholder="BHK/Office">
                         </div>
@@ -566,14 +640,14 @@ function renderDrafts(drafts) {
                             <input type="text" class="form-control form-control-sm item-price fw-bold text-success" value="${item.price || ''}" placeholder="Price">
                         </div>
                     </div>`;
-                });
-                categoriesHtml += `</div>`;
-            }
-        } else {
-            categoriesHtml = `<p class="text-muted small">No property sizes available.</p>`;
+            });
+            categoriesHtml += `</div>`;
         }
+    } else {
+        categoriesHtml = `<p class="text-muted small">No property sizes available.</p>`;
+    }
 
-        const cardHTML = `
+    return `
             <div class="draft-card p-4" id="card-${draft.id}">
                 <div class="d-flex justify-content-between align-items-center mb-4 border-bottom pb-3">
                     <div class="d-flex align-items-center">
@@ -595,7 +669,6 @@ function renderDrafts(drafts) {
                 </div>
 
                 <div class="row g-4">
-                    <!-- General Details Section -->
                     <div class="col-lg-6">
                         <h6 class="fw-bold mb-3" style="color: #0f766e;"><i class="bi bi-info-circle me-2"></i>General Details</h6>
                         <div class="p-3 rounded" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
@@ -626,7 +699,6 @@ function renderDrafts(drafts) {
                         </div>
                     </div>
 
-                    <!-- Pricing & Media Section -->
                     <div class="col-lg-6">
                         <h6 class="fw-bold mb-3" style="color: #0f766e;"><i class="bi bi-tag me-2"></i>Pricing & Media</h6>
                         <div class="p-3 rounded h-100" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
@@ -646,7 +718,6 @@ function renderDrafts(drafts) {
                         </div>
                     </div>
 
-                    <!-- Detailed Units Section -->
                     <div class="col-12 mt-4">
                         <div class="d-flex align-items-center mb-3">
                             <h6 class="fw-bold mb-0 me-2" style="color: #0f766e;"><i class="bi bi-grid-1x2 me-2"></i>Unit Configurations & Pricing</h6>
@@ -657,7 +728,6 @@ function renderDrafts(drafts) {
                         </div>
                     </div>
 
-                    <!-- Features Section -->
                     <div class="col-12 mt-3">
                         <div class="d-flex align-items-center mb-3">
                             <h6 class="fw-bold mb-0 me-2" style="color: #0f766e;"><i class="bi bi-stars me-2"></i>Features & Highlights</h6>
@@ -667,7 +737,6 @@ function renderDrafts(drafts) {
                             <div id="features-${draft.id}" class="row px-2">
                                 ${featureChecksHtml}
                             </div>
-                            <!-- Add Feature Input -->
                             <div class="row px-2 mt-2 pt-2 border-top">
                                 <div class="col-12">
                                     <div class="input-group input-group-sm">
@@ -696,11 +765,83 @@ function renderDrafts(drafts) {
                 </div>
             </div>
         `;
-        container.innerHTML += cardHTML;
-        
-        // initialize the generated ID logic for each card!
-        setTimeout(() => updateLocationID(draft.id), 0);
+}
+
+function renderDrafts(drafts) {
+    const container = document.getElementById("draftsContainer");
+
+    if (drafts.length === 0) {
+        container.innerHTML = "<div class=\"text-center py-5 text-muted\"><h5>No drafts match your selected filters.</h5></div>";
+        renderedDraftSignatures.clear();
+        return;
+    }
+
+    const hasExistingCards = container.querySelector(".draft-card") !== null;
+    if (!hasExistingCards) {
+        renderedDraftSignatures.clear();
+        const cardsHtml = drafts.map(draft => {
+            renderedDraftSignatures.set(String(draft.id), getDraftRenderSignature(draft));
+            return buildDraftCardHtml(draft);
+        });
+
+        container.innerHTML = cardsHtml.join("");
+        requestAnimationFrame(() => {
+            drafts.forEach(draft => updateLocationID(draft.id));
+        });
+        return;
+    }
+
+    const existingCards = new Map();
+    container.querySelectorAll(".draft-card").forEach(card => {
+        const id = card.id.replace(/^card-/, "");
+        if (id) {
+            existingCards.set(id, card);
+        }
     });
+
+    const nextIds = new Set(drafts.map(draft => String(draft.id)));
+    for (const [id, card] of existingCards.entries()) {
+        if (!nextIds.has(id)) {
+            card.remove();
+            renderedDraftSignatures.delete(id);
+            existingCards.delete(id);
+        }
+    }
+
+    const orderedCards = [];
+    const idsToInit = [];
+
+    drafts.forEach(draft => {
+        const id = String(draft.id);
+        const nextSignature = getDraftRenderSignature(draft);
+        let card = existingCards.get(id);
+        const shouldReplace = !card || renderedDraftSignatures.get(id) !== nextSignature;
+
+        if (shouldReplace) {
+            const replacementCard = createCardElementFromHtml(buildDraftCardHtml(draft));
+            if (card) {
+                card.replaceWith(replacementCard);
+            }
+            card = replacementCard;
+            idsToInit.push(draft.id);
+        }
+
+        renderedDraftSignatures.set(id, nextSignature);
+        orderedCards.push(card);
+    });
+
+    orderedCards.forEach((card, index) => {
+        const currentAtIndex = container.children[index];
+        if (currentAtIndex !== card) {
+            container.insertBefore(card, currentAtIndex || null);
+        }
+    });
+
+    if (idsToInit.length) {
+        requestAnimationFrame(() => {
+            idsToInit.forEach(id => updateLocationID(id));
+        });
+    }
 }
 
 function syncFeatureValue(inputEl, checkboxId) {
