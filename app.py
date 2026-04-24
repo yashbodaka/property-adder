@@ -3,6 +3,7 @@ import requests
 import json
 import re
 import os
+import time
 from datetime import datetime, date
 
 app = Flask(__name__)
@@ -10,6 +11,36 @@ app = Flask(__name__)
 # Config
 EXPRESS_API_ALL_BUILDER_VISITS = "https://render-backend-5sur.onrender.com/api/builder-visits?view=all"
 JS_FILE_PATH = "cardsData.js"
+DRAFTS_CACHE_TTL_SECONDS = 120
+
+_drafts_cache_payload = None
+_drafts_cache_ts = 0
+
+def parse_non_negative_int(value, default=0):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
+
+def should_force_refresh(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+def get_cached_drafts_payload(force_refresh=False):
+    global _drafts_cache_payload, _drafts_cache_ts
+
+    now = time.time()
+    if (
+        not force_refresh
+        and _drafts_cache_payload is not None
+        and (now - _drafts_cache_ts) < DRAFTS_CACHE_TTL_SECONDS
+    ):
+        return _drafts_cache_payload
+
+    payload = build_drafts_payload()
+    _drafts_cache_payload = payload
+    _drafts_cache_ts = now
+    return payload
 
 def fetch_json_with_retry(url, timeout=20, retries=1):
     last_error = "Unknown error"
@@ -85,6 +116,20 @@ def extract_min_price_lakhs(box_price_str):
 
 def normalize_text(value):
     return str(value or "").strip()
+
+def to_display_title(value):
+    text = normalize_text(value)
+    if not text:
+        return ""
+
+    def _word_replacer(match):
+        word = match.group(0)
+        # Preserve short all-caps tokens like BHK.
+        if word.isupper() and len(word) <= 4:
+            return word
+        return word[0].upper() + word[1:].lower()
+
+    return re.sub(r"[A-Za-z]+", _word_replacer, text)
 
 def canonical_location_key(value):
     text = normalize_text(value).lower()
@@ -205,8 +250,7 @@ def infer_bhk_label(prop_type, category, prop):
 def index():
     return render_template('index.html')
 
-@app.route('/api/drafts', methods=['GET'])
-def get_drafts():
+def build_drafts_payload():
     all_data = []
     fetch_success = False
     fetch_details = []
@@ -288,7 +332,7 @@ def get_drafts():
         
         priceNum = int(min_price_lakhs) if min_price_lakhs != float('inf') else 0
         
-        features = v.get("usps", [])[:]
+        features = [to_display_title(item) for item in v.get("usps", []) if normalize_text(item)]
         
         # Rounded down to nearest multiple of 5 with a '+' for amenities
         try:
@@ -336,7 +380,7 @@ def get_drafts():
             "projectName": v.get("projectName", "Unknown"),
             "type": dType,
             "priceNum": priceNum,
-            "propertyLocation": v.get("location", ""),
+            "propertyLocation": to_display_title(v.get("location", "")),
             "remarks": v.get("remarks") or v.get("remark", ""),
             "features": list(dict.fromkeys(features)), # deduplicate features
             "nestedCategories": nested_categories
@@ -366,13 +410,37 @@ def get_drafts():
     except FileNotFoundError:
         pass
 
-    return jsonify({
+    return {
         "status": "live" if fetch_success else "error",
         "data": drafts,
         "existingLocations": existing_locations,
         "message": "Live drafts fetched" if fetch_success else "Could not fetch live drafts from upstream API",
         "details": fetch_details
-    })
+    }
+
+@app.route('/api/drafts', methods=['GET'])
+def get_drafts():
+    limit = parse_non_negative_int(request.args.get("limit"), default=0)
+    offset = parse_non_negative_int(request.args.get("offset"), default=0)
+    force_refresh = should_force_refresh(request.args.get("refresh"))
+
+    payload = get_cached_drafts_payload(force_refresh=force_refresh)
+    all_drafts = payload.get("data", [])
+
+    if limit > 0:
+        sliced_drafts = all_drafts[offset:offset + limit]
+    else:
+        sliced_drafts = all_drafts[offset:]
+
+    total = len(all_drafts)
+    response_payload = dict(payload)
+    response_payload["data"] = sliced_drafts
+    response_payload["total"] = total
+    response_payload["offset"] = offset
+    response_payload["limit"] = limit if limit > 0 else len(sliced_drafts)
+    response_payload["hasMore"] = (offset + len(sliced_drafts)) < total
+
+    return jsonify(response_payload)
 
 @app.route('/api/generate-card', methods=['POST'])
 def generate_card():
@@ -388,22 +456,22 @@ def generate_card():
     images_list = [img.strip() for img in new_card.get("images", "").split(',') if img.strip()]
     incoming_features = new_card.get("features", [])
     if isinstance(incoming_features, list):
-        features_list = [str(f).replace("\\n", "\n").strip() for f in incoming_features if str(f).strip()]
+        features_list = [to_display_title(str(f).replace("\\n", "\n").strip()) for f in incoming_features if str(f).strip()]
     else:
         raw_features = str(incoming_features).replace("\\n", "\n")
-        features_list = [f.strip() for f in raw_features.splitlines() if f.strip()]
+        features_list = [to_display_title(f.strip()) for f in raw_features.splitlines() if f.strip()]
     
     nested_categories = new_card.get("nestedCategories", {})
 
     card_obj = {
         "id": next_id,
         "type": new_card.get("type", "Residential"),
-        "latest": new_card.get("latest", ""),
-        "location": new_card.get("location", ""),
+        "latest": to_display_title(new_card.get("latest", "")),
+        "location": to_display_title(new_card.get("location", "")),
         "price": int(float(new_card.get("price", 0) or 0)),
         "soldOut": False,
         "images": images_list,
-        "propertyLocation": new_card.get("propertyLocation", ""),
+        "propertyLocation": to_display_title(new_card.get("propertyLocation", "")),
         "schemeName": new_card.get("schemeName", ""),
         "features": features_list,
         "nestedCategories": nested_categories,

@@ -195,6 +195,9 @@ let locationsModal;
 let existingLocationsMap = {};
 let fileHandle = null;
 let currentHighestId = 0;
+let prefetchWarningMessage = "";
+let currentLoadToken = 0;
+const stagedBatchSizes = [20, 20, 50, 100];
 
 async function selectLocalFile() {
     try {
@@ -223,7 +226,13 @@ async function selectLocalFile() {
         document.getElementById('draftsContainer').style.opacity = '1';
         document.getElementById('draftsContainer').style.pointerEvents = 'auto';
 
-        loadDrafts();
+        if (!allDrafts.length) {
+            await loadDrafts();
+        }
+
+        if (prefetchWarningMessage) {
+            alert(prefetchWarningMessage);
+        }
     } catch (err) {
         if(err.name !== "AbortError") {
             console.error(err);
@@ -277,27 +286,73 @@ async function parseFileContent() {
     document.getElementById('locationsCountValue').innerText = Object.keys(existingLocationsMap).length;
 }
 
-function loadDrafts() {
+function nextBatchSize(stepIndex) {
+    if (stepIndex < stagedBatchSizes.length) {
+        return stagedBatchSizes[stepIndex];
+    }
+    return stagedBatchSizes[stagedBatchSizes.length - 1];
+}
+
+function fetchDraftBatch(offset, limit) {
+    const params = new URLSearchParams({
+        offset: String(offset),
+        limit: String(limit)
+    });
+    return fetch(`/api/drafts?${params.toString()}`).then(res => res.json());
+}
+
+async function loadDrafts() {
+    const loadToken = ++currentLoadToken;
+    allDrafts = [];
+    prefetchWarningMessage = "";
+
     document.getElementById("draftsContainer").innerHTML = '<div class="text-center py-5"><div class="spinner-border text-teal" style="color: #14b8a6;" role="status"><span class="visually-hidden">Loading drafts...</span></div></div>';
 
-    fetch("/api/drafts")
-        .then(res => res.json())
-        .then(res => {
-            if(res.data) {
-                allDrafts = res.data;
-                // Backend still returns some existingLocationsMap if its server local file exists, but we trust the selected client file:
-                // Do not override user's existingLocationsMap locally.
-                filterDrafts();
-                if (res.status !== "live") {
-                    const detailText = Array.isArray(res.details) && res.details.length ? `\n${res.details.join("\n")}` : "";
-                    alert(`Unable to load live drafts from upstream API.${detailText}`);
-                }
-            } else {
-                document.getElementById("draftsContainer").innerHTML = "<p class=\"text-danger\">Failed to load drafts.</p>";
+    let offset = 0;
+    let stepIndex = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+        const batchLimit = nextBatchSize(stepIndex);
+        stepIndex += 1;
+
+        try {
+            const res = await fetchDraftBatch(offset, batchLimit);
+
+            if (loadToken !== currentLoadToken) {
+                return;
             }
-        }).catch(() => {
+
+            if (res.status !== "live") {
+                const detailText = Array.isArray(res.details) && res.details.length ? `\n${res.details.join("\n")}` : "";
+                prefetchWarningMessage = `Unable to load live drafts from upstream API.${detailText}`;
+            }
+
+            if (!res || !Array.isArray(res.data)) {
+                document.getElementById("draftsContainer").innerHTML = "<p class=\"text-danger\">Failed to load drafts.</p>";
+                return;
+            }
+
+            allDrafts = allDrafts.concat(res.data);
+            filterDrafts();
+
+            offset += res.data.length;
+            hasMore = Boolean(res.hasMore) && res.data.length > 0;
+
+            // Yield back to the browser between batches to keep interactions responsive.
+            await new Promise(resolve => setTimeout(resolve, 0));
+        } catch {
+            if (loadToken !== currentLoadToken) {
+                return;
+            }
             document.getElementById("draftsContainer").innerHTML = "<p class=\"text-danger\">Failed to fetch data.</p>";
-        });
+            return;
+        }
+    }
+
+    if (!allDrafts.length) {
+        document.getElementById("draftsContainer").innerHTML = "<div class=\"text-center py-5 text-muted\"><h5>No drafts available right now.</h5></div>";
+    }
 }
 
 function showLocationsModal() {
@@ -479,10 +534,15 @@ function renderDrafts(drafts) {
         let categoriesHtml = "";
         if(draft.nestedCategories && Object.keys(draft.nestedCategories).length > 0) {
             for(const [catName, catItems] of Object.entries(draft.nestedCategories)) {
-                categoriesHtml += `<div class="mb-3 border rounded p-3 bg-white shadow-sm" style="border-color: #e2e8f0 !important;">
-                    <div class="d-flex align-items-center border-bottom pb-2 mb-3">
-                        <i class="bi bi-building-add me-2 text-muted"></i>
-                        <h6 class="mb-0 fw-bold" style="color: #0f766e;">${catName}</h6>
+                categoriesHtml += `<div class="mb-3 border rounded p-3 bg-white shadow-sm" data-category-block="true" style="border-color: #e2e8f0 !important;">
+                    <div class="d-flex align-items-center justify-content-between border-bottom pb-2 mb-3">
+                        <div class="d-flex align-items-center">
+                            <i class="bi bi-building-add me-2 text-muted"></i>
+                            <h6 class="mb-0 fw-bold" style="color: #0f766e;">${catName}</h6>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-danger" onclick="removePropertyTypeBlock(this)">
+                            <i class="bi bi-trash3 me-1"></i>Remove Type
+                        </button>
                     </div>
                     <div class="row fw-bold text-muted small mb-2 d-none d-md-flex px-1">
                         <div class="col-3">Type/BHK</div>
@@ -675,6 +735,18 @@ function addCustomFeature(draftId) {
     container.insertAdjacentHTML('beforeend', newFeatureHtml);
     input.value = "";
     input.focus();
+}
+
+function removePropertyTypeBlock(buttonEl) {
+    const block = buttonEl.closest('[data-category-block="true"]');
+    if (!block) return;
+
+    const container = block.parentElement;
+    block.remove();
+
+    if (container && !container.querySelector('[data-category-block="true"]')) {
+        container.innerHTML = '<p class="text-muted small mb-0">No property sizes available.</p>';
+    }
 }
 
 function approveDraft(draftId) {
